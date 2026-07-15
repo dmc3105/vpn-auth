@@ -3,6 +3,14 @@ name: Deploy to VPS
 on:
   push:
     branches: [ "master" ]  # Замените на вашу основную ветку
+  workflow_dispatch:        # Добавляет возможность ручного запуска
+    # Опционально: можно добавить параметры для ручного запуска
+    inputs:
+      branch:
+        description: 'Branch to deploy'
+        required: true
+        default: 'master'
+        type: string
 
 jobs:
   deploy:
@@ -12,6 +20,8 @@ jobs:
       # 1. Клонируем репозиторий
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'master' }}
 
       # 2. Готовим каталог приложения на VPS
       - name: Prepare VPS directory
