@@ -89,6 +89,20 @@ class UserOut(BaseModel):
     invite_code: str
 
 
+class AdminCreateUserRequest(BaseModel):
+    email: EmailStr
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str | None = Field(default=None, max_length=100)
+    invite_code: str | None = Field(default=None, min_length=6, max_length=64)
+
+
+class AdminCreateUserResponse(BaseModel):
+    user: UserOut
+    server: str
+    username: str
+    password: str
+
+
 class MessageResponse(BaseModel):
     message: str
 

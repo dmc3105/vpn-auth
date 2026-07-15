@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Button, Card, Modal, Table } from "react-bootstrap";
-import { deleteUserById, getUsers } from "../api";
+import { Button, Card, Form, Modal, OverlayTrigger, Table, Tooltip } from "react-bootstrap";
+import { createAdminUser, deleteUserById, getAdminUserConnection, getUsers } from "../api";
 import AdminAuthGate from "../components/AdminAuthGate";
+import { buildHysteriaUri } from "../utils/hysteriaUri";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -22,6 +23,19 @@ function SortableHeader({ label, column, sortBy, sortDir, onClick }) {
   );
 }
 
+function ActionTooltip({ id, label, children }) {
+  return (
+    <OverlayTrigger
+      placement="top"
+      delay={{ show: 0, hide: 0 }}
+      container={typeof document !== "undefined" ? document.body : undefined}
+      overlay={<Tooltip id={id}>{label}</Tooltip>}
+    >
+      {children}
+    </OverlayTrigger>
+  );
+}
+
 export default function AdminUsersPage({ notify }) {
   return (
     <AdminAuthGate notify={notify}>
@@ -38,6 +52,15 @@ function AdminUsersContent({ logout, notify }) {
   const [sortDir, setSortDir] = useState("desc");
   const [userToDelete, setUserToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [copyingUserId, setCopyingUserId] = useState(null);
+  const [createdConnectionUri, setCreatedConnectionUri] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [form, setForm] = useState({
+    email: "",
+    first_name: "",
+    last_name: "",
+    invite_code: ""
+  });
   const pageSize = 20;
 
   const loadPage = async (currentPage, by = sortBy, dir = sortDir) => {
@@ -84,6 +107,44 @@ function AdminUsersContent({ logout, notify }) {
     }
   };
 
+  const copyConnectionUri = async (userId) => {
+    setCopyingUserId(userId);
+    try {
+      const connection = await getAdminUserConnection(userId);
+      const uri = buildHysteriaUri(connection);
+      await navigator.clipboard.writeText(uri);
+      notify("success", "Ссылка для прокси скопирована.");
+    } catch (err) {
+      notify("danger", err.message);
+    } finally {
+      setCopyingUserId(null);
+    }
+  };
+
+  const handleCreateUser = async (event) => {
+    event.preventDefault();
+    if (isCreating) return;
+    setIsCreating(true);
+    try {
+      const payload = {
+        email: form.email.trim(),
+        first_name: form.first_name.trim(),
+        last_name: form.last_name.trim() || null,
+        invite_code: form.invite_code.trim() || null
+      };
+      const result = await createAdminUser(payload);
+      const uri = buildHysteriaUri(result);
+      setCreatedConnectionUri(uri);
+      notify("success", `Пользователь ${payload.email} создан.`);
+      setForm({ email: "", first_name: "", last_name: "", invite_code: "" });
+      await loadPage(1, sortBy, sortDir);
+    } catch (err) {
+      notify("danger", err.message);
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   return (
     <Card>
@@ -94,6 +155,56 @@ function AdminUsersContent({ logout, notify }) {
             Выйти
           </Button>
         </div>
+
+        <Card className="mb-4 bg-light border-0">
+          <Card.Body>
+            <Card.Subtitle className="mb-3">Ручная регистрация (без подтверждения почты)</Card.Subtitle>
+            <Form onSubmit={handleCreateUser}>
+              <div className="row g-2">
+                <div className="col-md-3">
+                  <Form.Control
+                    type="email"
+                    placeholder="Email"
+                    value={form.email}
+                    onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="col-md-2">
+                  <Form.Control
+                    placeholder="Имя"
+                    value={form.first_name}
+                    onChange={(e) => setForm((prev) => ({ ...prev, first_name: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="col-md-2">
+                  <Form.Control
+                    placeholder="Фамилия (необяз.)"
+                    value={form.last_name}
+                    onChange={(e) => setForm((prev) => ({ ...prev, last_name: e.target.value }))}
+                  />
+                </div>
+                <div className="col-md-3">
+                  <Form.Control
+                    placeholder="Invite-код (необяз.)"
+                    value={form.invite_code}
+                    onChange={(e) => setForm((prev) => ({ ...prev, invite_code: e.target.value }))}
+                  />
+                </div>
+                <div className="col-md-2">
+                  <Button type="submit" className="w-100" disabled={isCreating}>
+                    {isCreating ? "Создание..." : "Создать"}
+                  </Button>
+                </div>
+              </div>
+              <Form.Text className="text-muted">
+                Если invite-код не указан, будет создан служебный код автоматически.
+              </Form.Text>
+            </Form>
+          </Card.Body>
+        </Card>
+
         <div className="table-responsive">
           <Table bordered hover size="sm" className="align-middle mb-0">
             <thead>
@@ -115,13 +226,25 @@ function AdminUsersContent({ logout, notify }) {
                   <td>{formatDate(user.created_at)}</td>
                   <td>{user.invite_code}</td>
                   <td>
-                    <Button
-                      size="sm"
-                      variant="outline-danger"
-                      onClick={() => setUserToDelete(user)}
-                    >
-                      Удалить
-                    </Button>
+                    <div className="d-flex flex-wrap gap-2">
+                      <ActionTooltip id={`user-uri-${user.id}`} label="Скопировать hysteria2:// ссылку для прокси">
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          disabled={copyingUserId === user.id}
+                          onClick={() => copyConnectionUri(user.id)}
+                        >
+                          <i className="bi bi-link-45deg" />
+                        </Button>
+                      </ActionTooltip>
+                      <Button
+                        size="sm"
+                        variant="outline-danger"
+                        onClick={() => setUserToDelete(user)}
+                      >
+                        Удалить
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -152,6 +275,35 @@ function AdminUsersContent({ logout, notify }) {
             </Button>
             <Button variant="danger" onClick={confirmDeleteUser} disabled={isDeleting}>
               {isDeleting ? "Удаление..." : "Удалить"}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+        <Modal show={Boolean(createdConnectionUri)} onHide={() => setCreatedConnectionUri("")} centered size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>Пользователь создан</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <p className="mb-2">Ссылка для подключения к прокси (Hysteria):</p>
+            <Form.Control
+              as="textarea"
+              rows={4}
+              readOnly
+              value={createdConnectionUri}
+              style={{ fontFamily: "monospace" }}
+            />
+          </Modal.Body>
+          <Modal.Footer>
+            <Button
+              variant="outline-primary"
+              onClick={async () => {
+                await navigator.clipboard.writeText(createdConnectionUri);
+                notify("success", "Ссылка скопирована.");
+              }}
+            >
+              Скопировать ссылку
+            </Button>
+            <Button variant="primary" onClick={() => setCreatedConnectionUri("")}>
+              Закрыть
             </Button>
           </Modal.Footer>
         </Modal>

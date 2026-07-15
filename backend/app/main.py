@@ -12,6 +12,8 @@ from app.database import Base, engine, get_db
 from app.models import InviteCode, User
 from app.schemas import (
     CreateInviteCodesRequest,
+    AdminCreateUserRequest,
+    AdminCreateUserResponse,
     DeleteProfileRequest,
     HealthResponse,
     InviteCodeOut,
@@ -40,14 +42,12 @@ from app.security import (
     validate_user_csrf,
 )
 from app.services import (
-    apply_hysteria_user,
     create_email_verification,
     create_delete_verification,
+    create_user_with_invite,
     ensure_email_verified,
     ensure_user_exists,
-    generate_hysteria_password,
     generate_invite_code,
-    generate_unique_vpn_username,
     remove_hysteria_user,
     validate_invite_code,
     verify_delete_code,
@@ -183,24 +183,13 @@ def register(payload: RegisterRequest, response: Response, db: Session = Depends
 
     ensure_email_verified(db, payload.email)
     invite = validate_invite_code(db, payload.invite_code)
-    vpn_username = generate_unique_vpn_username(db)
-    hysteria_password = generate_hysteria_password()
-    apply_hysteria_user(vpn_username, hysteria_password)
-
-    user = User(
+    user = create_user_with_invite(
+        db,
         email=payload.email,
-        vpn_username=vpn_username,
         first_name=payload.first_name,
         last_name=payload.last_name,
-        hysteria_password=hysteria_password,
-        invite_code_id=invite.id,
+        invite=invite,
     )
-    invite.is_used = True
-    invite.used_by_email = payload.email
-    invite.used_at = datetime.utcnow()
-    db.add(user)
-    db.commit()
-    db.refresh(user)
 
     write_audit_log(db, "user_registered", payload.email, f"Registered via invite code {invite.code}")
     token = create_access_token(payload.email, token_type="user")
@@ -227,8 +216,8 @@ def register(payload: RegisterRequest, response: Response, db: Session = Depends
     return RegisterResponse(
         message="Registration completed",
         server=settings.registration_base_url,
-        username=vpn_username,
-        password=hysteria_password,
+        username=user.vpn_username,
+        password=user.hysteria_password,
     )
 
 
@@ -291,13 +280,7 @@ def user_session(_: str = Depends(get_current_user)) -> MessageResponse:
 @app.get(f"{settings.api_prefix}/profile/connection", response_model=ProfileConnectionResponse)
 def profile_connection(current_email: str = Depends(get_current_user), db: Session = Depends(get_db)) -> ProfileConnectionResponse:
     user = ensure_user_exists(db, current_email)
-    if not user.vpn_username or not user.hysteria_password:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection data not found")
-    return ProfileConnectionResponse(
-        server=settings.registration_base_url,
-        username=user.vpn_username,
-        password=user.hysteria_password,
-    )
+    return user_connection_response(user)
 
 
 @app.post(f"{settings.api_prefix}/profile/request-delete-code", response_model=MessageResponse)
@@ -436,18 +419,78 @@ def list_users(
     query = db.query(User)
     total = query.count()
     users = query.order_by(order).offset((page - 1) * page_size).limit(page_size).all()
-    items = [
-        UserOut(
-            id=item.id,
-            email=item.email,
-            first_name=item.first_name,
-            last_name=item.last_name,
-            created_at=item.created_at,
-            invite_code=item.invite_code.code,
-        )
-        for item in users
-    ]
+    items = [user_to_out(item) for item in users]
     return PaginatedUsersResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+def user_to_out(user: User) -> UserOut:
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        created_at=user.created_at,
+        invite_code=user.invite_code.code,
+    )
+
+
+def user_connection_response(user: User) -> ProfileConnectionResponse:
+    if not user.vpn_username or not user.hysteria_password:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection data not found")
+    return ProfileConnectionResponse(
+        server=settings.registration_base_url,
+        username=user.vpn_username,
+        password=user.hysteria_password,
+    )
+
+
+@app.post(f"{settings.api_prefix}/admin/users", response_model=AdminCreateUserResponse)
+def create_user_by_admin(
+    payload: AdminCreateUserRequest,
+    admin: str = Depends(get_current_admin),
+    _: None = Depends(validate_admin_csrf),
+    db: Session = Depends(get_db),
+) -> AdminCreateUserResponse:
+    existing_user = db.query(User).filter(User.email == payload.email).first()
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already exists")
+
+    if payload.invite_code:
+        invite = validate_invite_code(db, payload.invite_code)
+    else:
+        invite = InviteCode(code=generate_invite_code(), created_by=admin, is_hidden=True)
+        db.add(invite)
+        db.flush()
+
+    user = create_user_with_invite(
+        db,
+        email=payload.email,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        invite=invite,
+    )
+    invite_label = payload.invite_code or invite.code
+    write_audit_log(db, "user_created_by_admin", admin, f"Created user {payload.email} via invite {invite_label}")
+
+    return AdminCreateUserResponse(
+        user=user_to_out(user),
+        server=settings.registration_base_url,
+        username=user.vpn_username,
+        password=user.hysteria_password,
+    )
+
+
+@app.get(f"{settings.api_prefix}/admin/users/{{user_id}}/connection", response_model=ProfileConnectionResponse)
+def admin_user_connection(
+    user_id: int,
+    admin: str = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> ProfileConnectionResponse:
+    _ = admin
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return user_connection_response(user)
 
 
 @app.delete(f"{settings.api_prefix}/admin/users/{{user_id}}", response_model=MessageResponse)

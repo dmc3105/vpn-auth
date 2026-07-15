@@ -262,6 +262,35 @@ def write_audit_log(db: Session, action: str, actor: str, details: str) -> None:
     db.commit()
 
 
+def create_user_with_invite(
+    db: Session,
+    *,
+    email: str,
+    first_name: str,
+    last_name: str | None,
+    invite: InviteCode,
+) -> User:
+    vpn_username = generate_unique_vpn_username(db)
+    hysteria_password = generate_hysteria_password()
+    apply_hysteria_user(vpn_username, hysteria_password)
+
+    user = User(
+        email=email,
+        vpn_username=vpn_username,
+        first_name=first_name,
+        last_name=last_name,
+        hysteria_password=hysteria_password,
+        invite_code_id=invite.id,
+    )
+    invite.is_used = True
+    invite.used_by_email = email
+    invite.used_at = datetime.utcnow()
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def validate_invite_code(db: Session, code: str) -> InviteCode:
     invite = db.query(InviteCode).filter(InviteCode.code == code, InviteCode.is_hidden.is_(False)).first()
     if not invite:

@@ -173,3 +173,14 @@ export function getUsers(params = {}) {
 export function deleteUserById(userId) {
   return request(`/admin/users/${userId}`, { method: "DELETE" });
 }
+
+export function createAdminUser(payload) {
+  return request("/admin/users", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getAdminUserConnection(userId) {
+  return request(`/admin/users/${userId}/connection`);
+}

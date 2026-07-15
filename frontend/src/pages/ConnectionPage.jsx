@@ -3,9 +3,7 @@ import { Button, Card, Form } from "react-bootstrap";
 import { QRCodeCanvas } from "qrcode.react";
 import { getProfileConnection } from "../api";
 import GuidesAccordion from "../components/GuidesAccordion";
-
-const HYSTERIA_URI_TAG = import.meta.env.VITE_HYSTERIA_URI_TAG || "VPN Auth";
-
+import { buildHysteriaUri } from "../utils/hysteriaUri";
 function normalizeConnectionData(raw) {
   if (!raw || typeof raw !== "object") return null;
   return {
@@ -37,39 +35,6 @@ export default function ConnectionPage({ notify }) {
     if (notify) {
       notify("success", `${label} скопировано`);
     }
-  };
-
-  const parseServerEndpoint = (rawServer) => {
-    const input = String(rawServer || "").trim();
-    if (!input) return { host: "", port: 443 };
-
-    // Supports values like:
-    // hs2.example.com:443
-    // https://hs2.example.com:443
-    // hs2.example.com
-    const withScheme = input.includes("://") ? input : `https://${input}`;
-    try {
-      const url = new URL(withScheme);
-      return {
-        host: url.hostname,
-        port: Number(url.port) || 443
-      };
-    } catch {
-      const cleaned = input.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-      const [host, portRaw] = cleaned.split(":");
-      return { host: host || cleaned, port: Number(portRaw) || 443 };
-    }
-  };
-
-  const buildHysteriaUri = (connectionData) => {
-    const server = String(connectionData?.server || "").trim();
-    const username = String(connectionData?.username || "").trim();
-    const password = String(connectionData?.password || "").trim();
-    const { host, port } = parseServerEndpoint(server);
-    const auth = encodeURIComponent(`${username}:${password}`);
-    const sni = encodeURIComponent(host || server);
-    const tag = encodeURIComponent(HYSTERIA_URI_TAG);
-    return `hysteria2://${auth}@${host || server}:${port}?sni=${sni}#${tag}`;
   };
 
   return (
